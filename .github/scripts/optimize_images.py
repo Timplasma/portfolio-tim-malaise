@@ -2,7 +2,7 @@
 import re
 import shutil
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit, unquote
 
 from PIL import Image, ImageOps
 
@@ -28,8 +28,10 @@ def prepare_site():
 
 
 def convert_images():
-    """Convertit toutes les images JPG/JPEG en WebP."""
+    """Convertit les JPG/JPEG en WebP et conserve le format le plus léger."""
     converted = 0
+    deleted_jpg = 0
+    kept_jpg = 0
     saved = 0
 
     for image_path in SITE.rglob("*"):
@@ -42,106 +44,121 @@ def convert_images():
         output_path = image_path.with_suffix(".webp")
         original_size = image_path.stat().st_size
 
-        with Image.open(image_path) as image:
-            image = ImageOps.exif_transpose(image)
+        try:
+            with Image.open(image_path) as image:
+                image = ImageOps.exif_transpose(image)
 
-            if image.mode not in ("RGB", "RGBA"):
-                image = image.convert("RGB")
+                if image.mode not in ("RGB", "RGBA"):
+                    image = image.convert("RGB")
 
-            image.save(
-                output_path,
-                "WEBP",
-                quality=QUALITY,
-                method=6
-            )
+                image.save(
+                    output_path,
+                    "WEBP",
+                    quality=QUALITY,
+                    method=6
+                )
 
-        new_size = output_path.stat().st_size
-        saved += original_size - new_size
-        converted += 1
+            new_size = output_path.stat().st_size
+            converted += 1
 
-        print(
-            f"✓ {image_path.relative_to(SITE)} "
-            f"({original_size // 1024} KB → "
-            f"{new_size // 1024} KB)"
-        )
+            if new_size < original_size:
+                # Le WebP est plus léger : on supprime le JPG
+                image_path.unlink()
+                deleted_jpg += 1
+                saved += original_size - new_size
 
-    print(f"\n{converted} images converties.")
-    print(f"Économie : {saved / 1024 / 1024:.2f} MB")
+                print(
+                    f"✓ {image_path.relative_to(SITE)} "
+                    f"({original_size // 1024} KB → "
+                    f"{new_size // 1024} KB) — JPG supprimé"
+                )
 
+            else:
+                # Le WebP est plus lourd : on conserve le JPG
+                output_path.unlink()
+                kept_jpg += 1
 
-def convert_reference(value):
-    """Remplace une référence JPG par WebP si le fichier existe."""
+                print(
+                    f"↪ {image_path.relative_to(SITE)} "
+                    f"({original_size // 1024} KB → "
+                    f"{new_size // 1024} KB) — JPG conservé"
+                )
 
-    # Ignore les URL externes et les références particulières
-    if value.startswith((
-        "http://", "https://", "//", "data:", "blob:", "#"
-    )):
-        return value
+        except Exception as error:
+            print(f"✗ Erreur sur {image_path}: {error}")
 
-    parsed = urlsplit(value)
-    image_path = parsed.path
-
-    if not image_path.lower().endswith((".jpg", ".jpeg")):
-        return value
-
-    # Les chemins du portfolio sont relatifs à la racine du site
-    local_path = SITE / image_path.lstrip("/")
-
-    webp_path = local_path.with_suffix(".webp")
-
-    if not webp_path.is_file():
-        print(f"⚠ WebP introuvable : {value}")
-        return value
-
-    new_url = str(Path(image_path).with_suffix(".webp")).replace("\\", "/")
-
-    # Conserve les éventuels paramètres et ancres
-    return urlunsplit((
-        parsed.scheme,
-        parsed.netloc,
-        new_url,
-        parsed.query,
-        parsed.fragment
-    ))
+    print(f"\n{converted} images traitées.")
+    print(f"{deleted_jpg} JPG supprimés.")
+    print(f"{kept_jpg} JPG conservés.")
+    print(f"Économie totale : {saved / 1024 / 1024:.2f} MB")
 
 
 def update_javascript():
-    """Met à jour les références d'images dans les fichiers JS."""
-
-    # Capture les chaînes de caractères entre guillemets
+    # Détecte les chemins JPG/JPEG dans les chaînes JavaScript
     pattern = re.compile(
-        r"""(?P<quote>["'])(?P<value>[^"'\\]*(?:\\.[^"'\\]*)*)(?P=quote)"""
+        r"""(?P<quote>["'])(?P<path>[^"']+\.(?:jpg|jpeg)(?:[?#][^"']*)?)(?P=quote)""",
+        re.IGNORECASE
     )
 
-    modified = 0
+    js_files = list(SITE.rglob("*.js"))
 
-    for js_file in SITE.rglob("*.js"):
+    print(f"\nFichiers JavaScript trouvés : {len(js_files)}")
+
+    total_detected = 0
+    total_modified = 0
+
+    for js_file in js_files:
         content = js_file.read_text(encoding="utf-8")
 
-        def replace(match):
-            nonlocal modified
+        detected = 0
+        modified = 0
 
-            old_value = match.group("value")
+        def replace_reference(match):
+            nonlocal detected, modified
 
-            # Évite de toucher aux chaînes avec échappements
-            if "\\" in old_value:
+            original_path = match.group("path")
+            quote = match.group("quote")
+
+            # Séparer le chemin du éventuel query string / fragment
+            path_part, suffix = re.match(
+                r"^([^?#]*)(.*)$", original_path
+            ).groups()
+
+            detected += 1
+
+            # Ignorer les URL externes et chemins spéciaux
+            if "://" in path_part or path_part.startswith(("data:", "blob:")):
                 return match.group(0)
 
-            new_value = convert_reference(old_value)
+            # Rechercher le WebP correspondant
+            local_path = SITE / unquote(path_part).lstrip("/")
+            webp_path = local_path.with_suffix(".webp")
 
-            if new_value != old_value:
-                modified += 1
-                print(f"↻ {old_value} → {new_value}")
+            if not webp_path.is_file():
+                return match.group(0)
 
-            quote = match.group("quote")
-            return f"{quote}{new_value}{quote}"
+            new_path = str(Path(path_part).with_suffix(".webp")) + suffix
 
-        updated = pattern.sub(replace, content)
+            modified += 1
+            return f"{quote}{new_path}{quote}"
 
-        if updated != content:
-            js_file.write_text(updated, encoding="utf-8")
+        new_content = pattern.sub(replace_reference, content)
 
-    print(f"\n{modified} références JavaScript modifiées.")
+        total_detected += detected
+        total_modified += modified
+
+        if new_content != content:
+            js_file.write_text(new_content, encoding="utf-8")
+
+        print(
+            f"{js_file}: "
+            f"{detected} références JPG trouvées, "
+            f"{modified} modifiées"
+        )
+
+    print(f"\nTotal références JPG détectées : {total_detected}")
+    print(f"Total références modifiées : {total_modified}")
+
 
 
 if __name__ == "__main__":
