@@ -658,11 +658,14 @@ window.PORTFOLIO = {
         {
           type: "text",
           title: { en: "Github link", fr: "Lien Github" },
-          body: {
-            links:
-              { label: "GitHub",   url: "https://github.com/Matei6/PRONTO_RX-TX_chain"},
-          },
+          
         },
+        {
+          type: "links",
+          items:
+            [{
+              label: "GitHub",   url: "https://github.com/Matei6/PRONTO_RX-TX_chain"},]
+        }
       ],
     },
 
