@@ -5,7 +5,7 @@
 
 window.PORTFOLIO = {
   site: {
-    name: "Tim Malaise",
+    name: "Tim Malaisé",
     role: {
       en: "Engineering student · lighting programmer · software developer · Brest, France",
       fr: "Élève ingénieur · programmeur lumière · développeur logiciel · Brest, France",
