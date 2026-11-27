@@ -760,6 +760,7 @@
   addEventListener("resize", onScroll);
 
   /* ------------------------------------------------------------ case study */
+  var hideAnim = null;
   var caseEl = $("#case"),
     caseOpen = false,
     currentId = null,
@@ -1001,12 +1002,21 @@
     currentId = id;
     if (caseOpen) {
       fillCase(e);
+      caseEl.scrollTo(0, 0);
       return;
     }
+    if (hideAnim) {
+      hideAnim.cancel();
+      hideAnim = null;
+    }
+    caseEl.getAnimations().forEach(function (an) {
+      an.cancel();
+    });
     lastFocus = document.activeElement;
     fillCase(e);
     caseOpen = true;
     caseEl.hidden = false;
+    caseEl.scrollTop = 0;
     html.classList.add("lock");
     setInert(true);
     peekHide();
@@ -1040,6 +1050,7 @@
     currentId = null;
     document.title = D.site.name + " Portfolio";
     var done = function () {
+      caseEl.scrollTop = 0;
       caseEl.hidden = true;
       caseEl.innerHTML = "";
       caseEl.style.clipPath = "";
@@ -1062,7 +1073,12 @@
         ],
         { duration: 550, easing: "cubic-bezier(.7,0,.2,1)", fill: "forwards" },
       );
-      a.onfinish = done;
+      hideAnim = a;
+      a.onfinish = function () {
+        hideAnim = null;
+        done();
+        a.cancel();
+      };
     } else done();
   }
 
@@ -1084,6 +1100,10 @@
     }
     if (location.hash === "#" + id) {
       showCase(id);
+      return;
+    }
+    if (caseOpen) {
+      location.replace("#" + id);
       return;
     }
     pushedByUs = true;
